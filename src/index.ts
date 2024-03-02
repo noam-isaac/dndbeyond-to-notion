@@ -1,59 +1,113 @@
-import fs from 'fs';
-import { parse } from 'node-html-parser';
-import { Client } from '@notionhq/client';
-import { env } from '@/env';
 import { HTMLElement, Node, TextNode } from 'node-html-parser';
-import { BlockObjectRequest } from '@notionhq/client/build/src/api-endpoints';
 
-const notion = new Client({
-	auth: env.NOTION_SECRET,
+import { env } from '@/env';
+import {
+	notion,
+	BlockObjectRequestV,
+	RichTextItemRequest,
+	filterBlockObjects,
+} from './notion';
+import { filterHTMLElements, filterTextNodes, getSection } from './htmlParser';
+
+const parseTextNode = (node: TextNode): RichTextItemRequest => ({
+	type: 'text',
+	text: { content: node.text },
 });
 
-const html = fs.readFileSync('index.html', 'utf8');
-const parsedHtml = parse(html);
-const section = parsedHtml
-	?.querySelector('section.primary-content article')
-	?.removeWhitespace();
-if (!section) {
-	throw new Error(
-		'Could not find section.primary-content div.p-article-content',
-	);
-}
+let pageTitle = 'TEMPORARY PAGE TITLE';
+const parseHtmlElement = (element: HTMLElement): BlockObjectRequestV | null => {
+	switch (element.tagName) {
+		case 'H1':
+			if (pageTitle !== 'TEMPORARY PAGE TITLE')
+				throw new Error('Multiple H1 elements found');
+			pageTitle = element.text;
+		case 'H2':
+			if (element.text === '') {
+				return null;
+			}
+			return {
+				heading_1: {
+					rich_text: element.childNodes
+						.filter(filterTextNodes)
+						.map(parseTextNode),
+				},
+			};
+		case 'H3':
+			return {
+				heading_2: {
+					rich_text: element.childNodes
+						.filter(filterTextNodes)
+						.map(parseTextNode),
+				},
+			};
+		case 'H4':
+			return {
+				heading_3: {
+					rich_text: element.childNodes
+						.filter(filterTextNodes)
+						.map(parseTextNode),
+				},
+			};
+		case 'H5':
+			return {
+				paragraph: {
+					rich_text: element.childNodes
+						.filter(filterTextNodes)
+						.map(parseTextNode)
+						.map((item) => ({
+							...item,
+							annotations: { underline: true },
+						})),
+				},
+			};
+		case 'P':
+			return {
+				paragraph: {
+					rich_text: element.childNodes
+						.filter(filterTextNodes)
+						.map(parseTextNode),
+				},
+			};
+		case 'UL':
+		case 'DIV':
+		case 'ASIDE':
+		case 'FIGURE':
+		case 'SELECT':
+		case 'A':
+			// console.log('Discarded element', element.outerHTML);
+			return null;
+		default:
+			throw new Error(`Unknown element: ${element.tagName}`);
+	}
+};
 
-const parseHtmlElement = (element: Node): string | string[] => {
+const parseNode = (
+	element: Node,
+): BlockObjectRequestV | RichTextItemRequest | null => {
 	if (element instanceof HTMLElement) {
-		console.log(element.tagName);
-		return element.childNodes
-			.flatMap(parseHtmlElement)
-			.map((parsedNode) => element.tagName + ' ' + parsedNode);
+		return parseHtmlElement(element);
 	}
 	if (element instanceof TextNode) {
-		return element.text;
+		return parseTextNode(element);
 	}
 	throw new Error('All nodes should be either HTMLElements or TextNodes.');
 };
 
-const createdPage = await notion.pages.create({
-	parent: {
-		type: 'page_id',
-		page_id: env.ROOT_PAGE_ID,
-	},
-	properties: {
-		title: [{ type: 'text', text: { content: 'Title' } }],
-		type: 'title',
-	},
-});
-const contents = parseHtmlElement(section) as string[];
+const contents = getSection()
+	.childNodes.map(parseNode)
+	.filter(Boolean)
+	.filter(filterBlockObjects);
 
-notion.blocks.children.append({
-	block_id: createdPage.id,
-	children: contents
-		.map(
-			(content): BlockObjectRequest => ({
-				object: 'block',
-				type: 'paragraph',
-				paragraph: { rich_text: [{ type: 'text', text: { content } }] },
-			}),
-		)
-		.slice(0, 10),
+const page = await notion.pages.create({
+	parent: { type: 'page_id', page_id: env.ROOT_PAGE_ID },
+	properties: {
+		title: { title: [{ type: 'text', text: { content: pageTitle } }] },
+	},
+	children: contents.slice(0, 100),
 });
+for (let i = 100; i < contents.length; i += 100) {
+	await notion.blocks.children.append({
+		block_id: page.id,
+		children: contents.slice(i, i + 100),
+	});
+}
