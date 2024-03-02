@@ -8,6 +8,7 @@ export const env = createEnv({
 	server: {
 		NOTION_SECRET: z.string(),
 		ROOT_PAGE_ID: z.string(),
+		BASE_URL: z.string(),
 	},
 	client: {},
 	clientPrefix: 'NEXT_PUBLIC_',

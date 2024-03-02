@@ -1,9 +1,9 @@
 import fs from 'fs';
 import { HTMLElement, Node, TextNode, parse } from 'node-html-parser';
 
-export const filterHTMLElements = (node: Node): node is HTMLElement =>
+export const isHTMLElement = (node: Node): node is HTMLElement =>
 	node instanceof HTMLElement;
-export const filterTextNodes = (node: Node): node is TextNode =>
+export const isTextNode = (node: Node): node is TextNode =>
 	node instanceof TextNode;
 
 const html = fs.readFileSync('index.html', 'utf8');
